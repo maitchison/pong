@@ -1,1 +1,1 @@
-A project to analise reinforcement learning algorthims on the atari game Pong.
+A project to analyze reinforcement learning algorthims on the Atari game Pong.
