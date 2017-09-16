@@ -6,10 +6,15 @@ import pickle
 import os
 import datetime
 
+# just for host name
+import socket
+
 """
 Changes:
 added total training time.
 """
+
+MODEL_FOLDER = 'models/'
 
 # Helper functions.
 
@@ -47,19 +52,46 @@ class Config:
         
         # default values
         self.D = 80 * 80
-        self.H = 200
-        self.batch_size = 10    
-        self.learning_rate = 1e-4
+        self.H = 100
+        self.batch_size = 5    
+        self.learning_rate = 3e-3
         self.gamma = 0.99       
         self.decay_rate = 0.99     
-        self.weight_decay = 0.00  
+        self.weight_decay = 0.01
         self.data_type = 'float32'
-       
+        
+    def set_attr(self, k, v):
+        
+        if k == 'D':
+            self.D = int(v)
+        elif k == 'H':
+            self.H = int(v)
+        elif k == 'batch_size':
+            self.batch_size = int(v)
+        elif k == 'learning_rate':
+            self.learning_rate = float(v)
+        elif k == 'weight_decay':
+            self.weight_decay = float(v)
+        else:
+            raise exception("Invalid attribute {0}".format(k))
+        
+        
+    def display(self, one_line = False):
+        if one_line:
+            format_str =  "{0:10} {1:10} {2:10} {3:10}\n"
+            
+        else:
+            format_str =  "Hidden states:   {0}\n"+\
+                          "Learning rate:   {1}\n"+\
+                          "Weight decay:    {2:.4f}\n"+\
+                          "Batch size:      {3}\n"
+            
+        print(format_str.format(self.H, self.learning_rate, self.weight_decay, self.batch_size))
+        
        
 class Agent:
     
-    def __init__(self, name = "model", config = None):
-        
+    def __init__(self, name = "model", config = None, make_new = False):        
         """ Initialise a model.  Name will be used when saving. """
         self.name = name                # name of model
         self.params = {}                # model params
@@ -78,22 +110,40 @@ class Agent:
             
         self.save_filename = "{0}.p".format(self.name)
         
-        if os.path.isfile(self.save_filename):
+        if self.exists(self.name):
+            if make_new:
+                print("Model {0} already exists.".format(self.name))
+                exit()
             self.load()            
             print("Pickling up '{0}' from episode {1}...".format(self.name, self.episode))            
         else:
+            
+            if not make_new:
+                print("Model {0} not found.".format(self.name))
+                exit()
+        
             print("Starting new model '{0}'".format(self.name))
             self.params = {}
             self.params['W1'] = np.random.randn(self.config.H,self.config.D).astype(self.config.data_type) / np.sqrt(self.config.D) # "Xavier" initialization
             self.params['W2'] = np.random.randn(self.config.H).astype(self.config.data_type) / np.sqrt(self.config.H)
-            self.rmsprop_cache = { k : np.zeros_like(v) for k,v in self.params.items() }         
+            self.rmsprop_cache = { k : np.zeros_like(v) for k,v in self.params.items() }    
+            self.save()
 
         self.grad_buffer = { k : np.zeros_like(v) for k,v in self.params.items() } # update buffers that add up gradients over a batch
     
         self.batch_start_time = datetime.datetime.now()
+        
+        self.config.display()
     
         # history over an entire episode (this will be big!)    
         self.history = History()
+                
+        
+    def exists(self, model_name):
+        """ Returns if model exists or not. """
+        path = MODEL_FOLDER+"{0}.p".format(self.name)
+        return os.path.isfile(path)
+        
         
     def prepro(self, I):
         """ preprocess 210x160x3 uint8 frame into 6400 (80x80) 1D float vector """
@@ -132,12 +182,13 @@ class Agent:
         save_package['history'] = self.score_history
         save_package['stats'] = self.stats
         save_package['config'] = self.config
-        pickle.dump(save_package, open(filename, 'wb'))
+        pickle.dump(save_package, open(MODEL_FOLDER+filename, 'wb'))
         
         
-    def load(self):
+    def load(self, filename = None):
         """ Loads the parameters for the model from disk. """
-        save_package = pickle.load(open(self.save_filename, 'rb'))
+        if filename is None: filename = self.save_filename
+        save_package = pickle.load(open(MODEL_FOLDER+filename, 'rb'))
         self.params = save_package['params']
         self.episode = save_package['episodes']
         self.rmsprop_cache = save_package['rmsprop']
@@ -172,6 +223,7 @@ class Agent:
             self.params[k] += self.config.learning_rate * g / (np.sqrt(self.rmsprop_cache[k]) + 1e-5)            
             self.grad_buffer[k] = np.zeros_like(v) # reset batch gradient buffer
         self.params['W1'] -= self.params['W1'] * self.config.weight_decay * self.config.learning_rate
+        self.stats['machine_name'] = socket.gethostname()
 
     def evaluate(self, deterministic = False, episodes = 100):
         
@@ -194,7 +246,9 @@ class Agent:
             if 'ema_history' not in self.stats:
                 self.stats['ema_history'] = []
             self.stats['ema_history'].append((self.episode, self.ema))
-            print("Finished episode {0} in {4} steps with EMA reward {2:.2f} [{3:.2f}ms per frame]".format(self.episode, np.sum(self.history.reward), self.ema, frame_time, frames))        
+            print("[{5}] Ep {0} had {4} steps with (EMA) reward {2:.2f} [{3:.2f}ms per frame]".format(
+                self.episode, np.sum(self.history.reward), self.ema, frame_time, frames, self.name
+            ))        
                 
         # stack together all inputs, hidden states, action gradients, and rewards for this episode
         epx = np.vstack(self.history.x)
