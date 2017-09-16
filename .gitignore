@@ -102,3 +102,9 @@ venv.bak/
 .mypy_cache/
 *.p
 .DS_Store
+.idea/misc.xml
+.idea/modules.xml
+.idea/pong.iml
+.idea/vcs.xml
+.idea/workspace.xml
+~$Pong todo.xlsx

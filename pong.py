@@ -1,7 +1,18 @@
+#! /usr/bin/env python3
+
 import agent as rl
 import sys
-import os    
+import utils
 
+"""
+
+Front end for training PONG reinforcement algorthims.  Has various modes.
+
+train: trains a given model
+make: makes a new model with given parameters
+
+
+"""
 
 def train(model_name):
     
@@ -23,7 +34,13 @@ def train(model_name):
     agent.env.close()
 
     print("Finished.")
-    
+
+
+def info(model_names):
+    utils.show_model_header()
+    for name in model_names:
+        utils.show_model_info(name)
+
     
 def make(model_name, params):
     
@@ -87,6 +104,8 @@ elif sys.argv[1].lower() == 'eval':
     reevaluate(sys.argv[2])
 elif sys.argv[1].lower() == 'make':
     make(sys.argv[2], sys.argv[3:])
+elif sys.argv[1].lower() == 'info':
+    info(sys.argv[2:])
 else:
     print("Usage pong [train] [model-name]")
     exit()
