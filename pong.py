@@ -3,6 +3,8 @@
 import agent as rl
 import sys
 import utils
+import os
+import time
 
 """
 
@@ -37,11 +39,41 @@ def train(model_name):
 
 
 def info(model_names):
+    """ Display information about given models. """
     utils.show_model_header()
     for name in model_names:
         utils.show_model_info(name)
 
-    
+def is_backup_file(filename):
+    """ Returns if this filename is a backup file or not. """
+    # really should have thought this through before.  Backup files end with a number then k"
+    return filename[-3:] == 'k.p'
+
+def watch(filter = ''):
+    """ Continiously monitor model progress. """
+    spinner = ['-','\\','|','/']
+    i = 0
+
+    # hide cursor... doesn't work
+    #print("\e[?25l",end='')
+
+    # change color...
+    #print("\[\033[34m\]", end='')
+
+    while True:
+        # build a list of model names
+        files = os.listdir('models')
+        files = [file[:-2] for file in files if filter in file and file[-2:] == '.p' and not is_backup_file(file)]
+        info(files)
+        print(spinner[i % len(spinner)])
+        i += 1
+        time.sleep(10)
+        print("\033["+str(len(files)+2)+"A", end='')
+
+    # unhide cursor
+    print("\e[?25h",end='')
+
+
 def make(model_name, params):
     
     config = rl.Config()   
@@ -52,8 +84,8 @@ def make(model_name, params):
 
     agent = rl.Agent(name = model_name, config=config, make_new = True)
     
-    
-    
+
+# todo: move
 def reevaluate(model_name):
     
     """ Re-runs the evaluation tests for this model.  Requires the backup
@@ -106,6 +138,8 @@ elif sys.argv[1].lower() == 'make':
     make(sys.argv[2], sys.argv[3:])
 elif sys.argv[1].lower() == 'info':
     info(sys.argv[2:])
+elif sys.argv[1].lower() == 'watch':
+    watch(sys.argv[2] if len(sys.argv) == 3 else '')
 else:
     print("Usage pong [train] [model-name]")
     exit()

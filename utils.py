@@ -4,7 +4,7 @@ from datetime import datetime
 
 
 def show_model_header():
-    MODEL_INFO_HEADER = "Name                H      LR        WD        BS       IT         TIME       (ETA)     MACHINE"
+    MODEL_INFO_HEADER = "Name                H      LR        WD        BS        IT         TIME     (ETA)      MACHINE"
     print(MODEL_INFO_HEADER)
 
 def show_model_info(model_name):
@@ -16,7 +16,7 @@ def show_model_info(model_name):
         print("{0:20}           ---------------- missing ----------------".format(model_name))
         return
 
-    format_str = "{0:16} {1:>4}      {2:<6}    {3:<5} {4:6}   {5:7}{9} {6:>10.1f} hrs   [{8:>4.1f}]     {7}"
+    format_str = "{0:16} {1:>4}      {2:<6}    {3:<5} {4:6}   {5:7}{9}{6:>10.1f} hrs   [{8:>4.1f}]     {7}"
     config = save_package['config']
 
     iterations = save_package['episodes']
@@ -45,5 +45,5 @@ def show_model_info(model_name):
     print(format_str.format(
         model_name, config.H, config.learning_rate, config.weight_decay,
 
-        config.batch_size, iterations, cooking_time, machine_name, eta, "*" if recent else ""
+        config.batch_size, iterations, cooking_time, machine_name, eta, "*" if recent else " "
     ))
