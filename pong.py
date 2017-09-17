@@ -1,5 +1,4 @@
 #! /usr/bin/env python3
-
 import agent as rl
 import sys
 import utils
@@ -49,29 +48,43 @@ def is_backup_file(filename):
     # really should have thought this through before.  Backup files end with a number then k"
     return filename[-3:] == 'k.p'
 
+def get_models(filter = ''):
+    """ Returns a list of models. """
+    files = os.listdir('models')
+    files = [file[:-2] for file in files if filter in file and file[-2:] == '.p' and not is_backup_file(file)]
+
+
 def watch(filter = ''):
     """ Continiously monitor model progress. """
     spinner = ['-','\\','|','/']
     i = 0
 
-    # hide cursor... doesn't work
-    #print("\e[?25l",end='')
-
-    # change color...
-    #print("\[\033[34m\]", end='')
-
     while True:
         # build a list of model names
-        files = os.listdir('models')
-        files = [file[:-2] for file in files if filter in file and file[-2:] == '.p' and not is_backup_file(file)]
+        files = get_models(filter)
         info(files)
         print(spinner[i % len(spinner)])
         i += 1
         time.sleep(10)
         print("\033["+str(len(files)+2)+"A", end='')
 
-    # unhide cursor
-    print("\e[?25h",end='')
+
+def worker(filter = '*'):
+
+    while True:
+
+        # look for potential models to work on
+        files = get_models(filter)
+
+        # make sure model hasn't been worked on in a while (30 minutes...)
+
+        # see how much progress we need to make
+
+        # start working on this model
+        # >> can we spin this up in another thread, so that we can have multiple workers
+
+        print("Starting job {0}")
+        print("Finished job {0}")
 
 
 def make(model_name, params):

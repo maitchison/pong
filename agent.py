@@ -54,9 +54,9 @@ class Config:
         self.D = 80 * 80
         self.H = 100
         self.batch_size = 5    
-        self.learning_rate = 3e-3
-        self.gamma = 0.99       
-        self.decay_rate = 0.99     
+        self.learning_rate = 3e-3 
+        self.gamma = 0.99          # gamma for RMS prop
+        self.discount_rate = 0.99     # discount rate for algorithm  
         self.weight_decay = 0.01
         self.data_type = 'float32'
         
@@ -72,8 +72,12 @@ class Config:
             self.learning_rate = float(v)
         elif k == 'weight_decay':
             self.weight_decay = float(v)
+        elif k == 'discount_rate':
+            self.discount_rate = float(v)
+        elif k == 'gamma':
+            self.gamma = float(v)
         else:
-            raise exception("Invalid attribute {0}".format(k))
+            raise Exception("Invalid attribute {0}".format(k))
         
         
     def display(self, one_line = False):
@@ -82,11 +86,12 @@ class Config:
             
         else:
             format_str =  "Hidden states:   {0}\n"+\
-                          "Learning rate:   {1}\n"+\
+                          "Learning rate:   {1} / {5}\n"+\
                           "Weight decay:    {2:.4f}\n"+\
-                          "Batch size:      {3}\n"
+                          "Batch size:      {3}\n"+\
+                          "Discount rate:   {4}\n"
             
-        print(format_str.format(self.H, self.learning_rate, self.weight_decay, self.batch_size))
+        print(format_str.format(self.H, self.learning_rate, self.weight_decay, self.batch_size, self.discount_rate, self.gamma))
         
        
 class Agent:
@@ -196,6 +201,11 @@ class Agent:
         self.stats = save_package['stats'] if 'stats' in save_package else {}
         if 'config' in save_package:
             self.config = save_package['config']
+            # some of these used to have different names
+            if not hasattr(self.config, 'discount_rate'):
+                self.config.discount_rate = self.config.decay_rate
+                del self.config.decay_rate
+            
             
         # convert to correct datatype.
         for v in self.params.keys():
@@ -219,7 +229,7 @@ class Agent:
         # perform rmsprop parameter update every batch_size episodes 
         for k,v in self.params.items():
             g = self.grad_buffer[k] # gradient
-            self.rmsprop_cache[k] = self.config.decay_rate * self.rmsprop_cache[k] + (1 - self.config.decay_rate) * g**2
+            self.rmsprop_cache[k] = self.config.gamma * self.rmsprop_cache[k] + (1 - self.config.gamma) * g**2
             self.params[k] += self.config.learning_rate * g / (np.sqrt(self.rmsprop_cache[k]) + 1e-5)            
             self.grad_buffer[k] = np.zeros_like(v) # reset batch gradient buffer
         self.params['W1'] -= self.params['W1'] * self.config.weight_decay * self.config.learning_rate
@@ -258,7 +268,7 @@ class Agent:
     
         # compute the discounted reward backwards through time
         # standardize the rewards to be unit normal (helps control the gradient estimator variance)
-        discounted_epr = discount_rewards(epr, self.config.gamma)
+        discounted_epr = discount_rewards(epr, self.config.discount_rate)
         discounted_epr -= np.mean(discounted_epr)
         discounted_epr /= np.std(discounted_epr)
 

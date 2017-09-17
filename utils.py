@@ -43,7 +43,7 @@ def show_model_info(model_name):
         eta = 0
 
     print(format_str.format(
-        model_name, config.H, config.learning_rate, config.weight_decay,
+        model_name[:15], config.H, config.learning_rate, config.weight_decay,
 
         config.batch_size, iterations, cooking_time, machine_name, eta, "*" if recent else " "
     ))
