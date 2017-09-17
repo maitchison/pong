@@ -16,11 +16,8 @@ make: makes a new model with given parameters
 """
 
 def train(model_name):
-    
     """ Train specific model. """
 
-    # todo: check file exists...
-    
     agent = rl.Agent(name = model_name)
 
     training_episodes = 10000
@@ -30,7 +27,9 @@ def train(model_name):
             agent.train()
             agent.apply()
     except Exception as e:
-        print(e)
+        print("Error:",e)
+        agent.env.close()
+        return
 
     agent.env.close()
 
@@ -96,6 +95,7 @@ def make(model_name, params):
         config.set_attr(k, v)        
 
     agent = rl.Agent(name = model_name, config=config, make_new = True)
+    agent.save()
     
 
 # todo: move
@@ -103,6 +103,9 @@ def reevaluate(model_name):
     
     """ Re-runs the evaluation tests for this model.  Requires the backup
         models [model-name]_[x]k.p to be present."""  
+
+
+    # needs to be updated for new eval...
 
     num_trials = 1
             

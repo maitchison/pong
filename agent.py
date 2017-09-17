@@ -226,7 +226,7 @@ class Agent:
 
     def apply_batch(self):
         """ Updates weights with one batch of episodes worth of data. """
-        # perform rmsprop parameter update every batch_size episodes 
+        # perform rmsprop parameter update every batch_size episodes
         for k,v in self.params.items():
             g = self.grad_buffer[k] # gradient
             self.rmsprop_cache[k] = self.config.gamma * self.rmsprop_cache[k] + (1 - self.config.gamma) * g**2
@@ -238,28 +238,26 @@ class Agent:
     def evaluate(self, deterministic = False, episodes = 100):
         
         scores = []
+        frames = []
         for i in range(episodes):
             self.train(deterministic = deterministic)
-            scores.append(np.sum(self.history.reward))            
-        return scores                        
+            scores.append(np.sum(self.history.reward))
+            frames.append(len(self.history.reward))
+        return scores, frames
             
     
     def apply(self):
         """ Applies what was learned during training episode. """
-        
+
+        # save on 0k
+        if self.episode == 0:
+            self.save(self.name + "_" + str(self.episode // 1000) + "k.p")
+
+        apply_start_time = datetime.datetime.now()
+
         self.episode += 1
         self.ema = self.ema * 0.95 + 0.05 * np.sum(self.history.reward) if self.ema is not None else np.sum(self.history.reward)
 
-        if self.episode % 10 == 0:
-            frame_time = self.stats['last_episode_frame_time']
-            frames = self.stats['last_episode_frames']
-            if 'ema_history' not in self.stats:
-                self.stats['ema_history'] = []
-            self.stats['ema_history'].append((self.episode, self.ema))
-            print("[{5}] Ep {0} had {4} steps with (EMA) reward {2:.2f} [{3:.2f}ms per frame]".format(
-                self.episode, np.sum(self.history.reward), self.ema, frame_time, frames, self.name
-            ))        
-                
         # stack together all inputs, hidden states, action gradients, and rewards for this episode
         epx = np.vstack(self.history.x)
         eph = np.vstack(self.history.h)
@@ -277,8 +275,11 @@ class Agent:
         grad = self.policy_backward(eph, epx, epdlogp)
         for k in self.params: self.grad_buffer[k] += grad[k] # accumulate grad over batch
 
+        apply_finish_time = datetime.datetime.now()
+
+        self.stats['last_episode_apply_time'] = (apply_finish_time - apply_start_time).total_seconds()
+
         if self.episode % self.config.batch_size == 0:
-            self.apply_batch()
             batch_rewards = self.stats['this_batch_rewards']
             self.stats['this_batch_rewards'] = []
             self.stats['last_batch_rewards'] = batch_rewards
@@ -294,18 +295,51 @@ class Agent:
             self.save(self.name+"_"+str(self.episode//1000)+"k.p")
             print("Performing evaluation...")
             num_trials = 100
-            scores = self.evaluate(episodes = num_trials)
-            mean = np.mean(scores)
-            error = np.std(scores) / np.sqrt(num_trials)
-            self.score_history[self.episode] = (mean, error)
-            print("Score = {0:.2f} (±{1:.4f})".format(mean, error))
+            scores, frames = self.evaluate(episodes = num_trials)
+
+            score_mean = np.mean(scores)
+            score_std = np.std(scores)
+            score_error = np.std(scores) / np.sqrt(num_trials)
+            n = num_trials
+            frame_mean = np.mean(frames)
+            frame_std = np.std(frames)
+
+            # previous versions uses the 'score_history' field, we're now moving to stats['history'],
+            # but I'll keep this here for backwards compatability for a while.
+            self.score_history[self.episode] = (score_mean, score_error)
+            if 'history' not in self.stats['history']:
+                self.stats['history'] = {}
+
+            self.stats['history'][self.episode] = {
+                'score_mean': score_mean,
+                'score_std': score_std,
+                'score_error': score_error,
+                'n': n,
+                'frame_mean': frame_mean,
+                'frame_std': frame_std
+            }
+
+            print("Score = {0:.2f} (±{1:.4f})".format(score_mean, score_error))
             self.save()
+
+        if self.episode % 10 == 0:
+            frames = self.stats['last_episode_frames']
+            train_time = 1000.0 * self.stats['last_episode_train_time'] / frames
+            apply_time = 1000.0 * self.stats['last_episode_apply_time'] / frames
+            if 'ema_history' not in self.stats:
+                self.stats['ema_history'] = []
+            self.stats['ema_history'].append((self.episode, self.ema))
+
+            print("[{5}] Ep {0} had {4} steps with (EMA) reward {2:.2f} [T:{3:.2f}ms A:{6:.2f}]".format(
+                self.episode, np.sum(self.history.reward), self.ema, train_time, frames, self.name, apply_time
+            ))
+
 
         if self.episode % 100 == 0:
             print("Saving state.")
             self.save()
 
-    
+
     def train(self, render = False, deterministic = False):
         """ 
             Train the current model for one episode. 
@@ -372,17 +406,16 @@ class Agent:
 
             # we record the reward after the step as this will be the reward for the previous action.
             self.history.reward.append(reward)
-            
+
         episode_finish_time = datetime.datetime.now()
-        
+
         # calculate some handy stats
-        self.stats['last_episode_time'] = episode_finish_time - episode_start_time
+        self.stats['last_episode_train_time'] = (episode_finish_time - episode_start_time).total_seconds()
         self.stats['last_episode_frames'] = frames
-        self.stats['last_episode_frame_time'] = (self.stats['last_episode_time'] / frames).total_seconds()*1000.0
-        self.stats['last_episode_score'] = np.sum(self.history.reward)        
+        self.stats['last_episode_score'] = np.sum(self.history.reward)
         self.stats['last_episode_prepro_time'] = prepro_time
         self.stats['last_episode_forward_time'] = forward_time
-        self.stats['last_episode_step_time'] = step_time   
+        self.stats['last_episode_step_time'] = step_time
         if 'this_batch_rewards' not in self.stats:
             self.stats['this_batch_rewards'] = []
         self.stats['this_batch_rewards'].append(np.sum(self.history.reward))
