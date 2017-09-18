@@ -267,7 +267,6 @@ class Agent:
         # compute the discounted reward backwards through time
         # standardize the rewards to be unit normal (helps control the gradient estimator variance)
         discounted_epr = discount_rewards(epr, self.config.discount_rate)
-        print(discounted_epr)
         discounted_epr -= np.mean(discounted_epr)
         discounted_epr /= np.std(discounted_epr)
 
