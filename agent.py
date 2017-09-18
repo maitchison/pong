@@ -96,7 +96,7 @@ class Config:
        
 class Agent:
     
-    def __init__(self, name = "model", config = None, make_new = False):        
+    def __init__(self, name = "model", config = None, make_new = False, silent = False):
         """ Initialise a model.  Name will be used when saving. """
         self.name = name                # name of model
         self.params = {}                # model params
@@ -117,17 +117,17 @@ class Agent:
         
         if self.exists(self.name):
             if make_new:
-                print("Model {0} already exists.".format(self.name))
+                if not silent: print("Model {0} already exists.".format(self.name))
                 exit()
-            self.load()            
-            print("Pickling up '{0}' from episode {1}...".format(self.name, self.episode))            
+            self.load()
+            if not silent: print("Pickling up '{0}' from episode {1}...".format(self.name, self.episode))
         else:
             
             if not make_new:
                 print("Model {0} not found.".format(self.name))
                 exit()
-        
-            print("Starting new model '{0}'".format(self.name))
+
+            if not silent: print("Starting new model '{0}'".format(self.name))
             self.params = {}
             self.params['W1'] = np.random.randn(self.config.H,self.config.D).astype(self.config.data_type) / np.sqrt(self.config.D) # "Xavier" initialization
             self.params['W2'] = np.random.randn(self.config.H).astype(self.config.data_type) / np.sqrt(self.config.H)
@@ -137,8 +137,8 @@ class Agent:
         self.grad_buffer = { k : np.zeros_like(v) for k,v in self.params.items() } # update buffers that add up gradients over a batch
     
         self.batch_start_time = datetime.datetime.now()
-        
-        self.config.display()
+
+        if not silent: self.config.display()
     
         # history over an entire episode (this will be big!)    
         self.history = History()
@@ -249,14 +249,14 @@ class Agent:
     def apply(self):
         """ Applies what was learned during training episode. """
 
+        self.episode += 1
+        self.ema = self.ema * 0.95 + 0.05 * np.sum(self.history.reward) if self.ema is not None else np.sum(self.history.reward)
+
         # save on 0k
         if self.episode == 0:
             self.save(self.name + "_" + str(self.episode // 1000) + "k.p")
 
         apply_start_time = datetime.datetime.now()
-
-        self.episode += 1
-        self.ema = self.ema * 0.95 + 0.05 * np.sum(self.history.reward) if self.ema is not None else np.sum(self.history.reward)
 
         # stack together all inputs, hidden states, action gradients, and rewards for this episode
         epx = np.vstack(self.history.x)
@@ -267,6 +267,7 @@ class Agent:
         # compute the discounted reward backwards through time
         # standardize the rewards to be unit normal (helps control the gradient estimator variance)
         discounted_epr = discount_rewards(epr, self.config.discount_rate)
+        print(discounted_epr)
         discounted_epr -= np.mean(discounted_epr)
         discounted_epr /= np.std(discounted_epr)
 
@@ -279,7 +280,9 @@ class Agent:
 
         self.stats['last_episode_apply_time'] = (apply_finish_time - apply_start_time).total_seconds()
 
+        # apply batch
         if self.episode % self.config.batch_size == 0:
+            self.apply_batch()
             batch_rewards = self.stats['this_batch_rewards']
             self.stats['this_batch_rewards'] = []
             self.stats['last_batch_rewards'] = batch_rewards
@@ -290,7 +293,8 @@ class Agent:
                 self.stats['total_training_time'] = 0.0
             self.stats['total_training_time'] = self.stats['total_training_time'] + self.stats['last_batch_time'].total_seconds()
             self.batch_start_time = datetime.datetime.now()
-    
+
+        # save backup
         if self.episode % 1000 == 0:
             self.save(self.name+"_"+str(self.episode//1000)+"k.p")
             print("Performing evaluation...")
@@ -307,7 +311,8 @@ class Agent:
             # previous versions uses the 'score_history' field, we're now moving to stats['history'],
             # but I'll keep this here for backwards compatability for a while.
             self.score_history[self.episode] = (score_mean, score_error)
-            if 'history' not in self.stats['history']:
+
+            if 'history' not in self.stats:
                 self.stats['history'] = {}
 
             self.stats['history'][self.episode] = {
@@ -322,19 +327,17 @@ class Agent:
             print("Score = {0:.2f} (±{1:.4f})".format(score_mean, score_error))
             self.save()
 
+        # print
         if self.episode % 10 == 0:
             frames = self.stats['last_episode_frames']
             train_time = 1000.0 * self.stats['last_episode_train_time'] / frames
             apply_time = 1000.0 * self.stats['last_episode_apply_time'] / frames
-            if 'ema_history' not in self.stats:
-                self.stats['ema_history'] = []
-            self.stats['ema_history'].append((self.episode, self.ema))
-
-            print("[{5}] Ep {0} had {4} steps with (EMA) reward {2:.2f} [T:{3:.2f}ms A:{6:.2f}]".format(
-                self.episode, np.sum(self.history.reward), self.ema, train_time, frames, self.name, apply_time
+            self.stats.get('ema_history', []).append((self.episode, self.ema))
+            print("[{5}] Ep {0} had {4} steps with (EMA) reward {2:.2f} [{3:.2f}ms / frame]".format(
+                self.episode, np.sum(self.history.reward), self.ema, train_time + apply_time, frames, self.name
             ))
 
-
+        # saving
         if self.episode % 100 == 0:
             print("Saving state.")
             self.save()

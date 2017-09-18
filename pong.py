@@ -53,6 +53,23 @@ def get_models(filter = ''):
     files = [file[:-2] for file in files if filter in file and file[-2:] == '.p' and not is_backup_file(file)]
 
 
+def restart(model_name, pickup_point):
+    """ Restart the model from given point. """
+    k = int(pickup_point) // 1000
+
+    print("-"*40)
+    print("Restarting {0} from {1}".format(model_name, k*1000))
+    print("-" * 40)
+
+    backup_name = "{0}_{1}k".format(model_name, k)
+    agent = rl.Agent(name = backup_name, silent = True)
+    agent.name = model_name
+    agent.save_filename = model_name+".p"
+    agent.save()
+    train(model_name)
+
+
+
 def watch(filter = ''):
     """ Continiously monitor model progress. """
     spinner = ['-','\\','|','/']
@@ -154,6 +171,8 @@ elif sys.argv[1].lower() == 'make':
     make(sys.argv[2], sys.argv[3:])
 elif sys.argv[1].lower() == 'info':
     info(sys.argv[2:])
+elif sys.argv[1].lower() == 'restart':
+    restart(sys.argv[2], sys.argv[3] if len(sys.argv) >= 4 else "0")
 elif sys.argv[1].lower() == 'watch':
     watch(sys.argv[2] if len(sys.argv) == 3 else '')
 else:
