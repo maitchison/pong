@@ -5,7 +5,7 @@ import utils
 import os
 import time
 import numpy as np #remove
-from datetime import datetime
+import argparse
 
 """
 
@@ -17,15 +17,15 @@ make: makes a new model with given parameters
 
 """
 
-def train(model_name, training_episodes = 10000):
+def train(model, episodes = 10000):
     """ Train specific model. """
 
-    agent = rl.Agent(name = model_name)
+    agent = rl.Agent(name = model)
 
     agent.lock()
 
     try:
-        while agent.episode < training_episodes:
+        while agent.episode < episodes:
             agent.train()
             agent.apply()
     except Exception as e:
@@ -40,7 +40,13 @@ def train(model_name, training_episodes = 10000):
     print("Finished.")
 
 
-def info(model_names):
+def info(model):
+    """ Display information about given model. """
+    utils.show_model_header()
+    utils.show_model_info(model)
+
+
+def info_list(model_names):
     """ Display information about given models. """
     utils.show_model_header()
     for name in model_names:
@@ -78,7 +84,7 @@ def restart(model_name, pickup_point):
 
 
 
-def watch(filter = ''):
+def view(filter = ''):
     """ Continiously monitor model progress. """
     spinner = ['-','\\','|','/']
     i = 0
@@ -86,7 +92,7 @@ def watch(filter = ''):
     while True:
         # build a list of model names
         files = get_models(filter)
-        info(files)
+        info_list(files)
         print(spinner[i % len(spinner)])
         i += 1
         time.sleep(10)
@@ -105,7 +111,7 @@ def requires_work(model_name):
         return False
 
     # next check if someone is working on this
-    if model.worker != '' and model.recent():
+    if model.worker_name != '' and model.recent():
         return False
 
 
@@ -117,9 +123,11 @@ def requires_work(model_name):
 
 
 
-def worker(filter = ''):
+def work(filter = ''):
 
     print('Scanning....')
+    if filter != '':
+        print(" - applying filter '{0}'".format(filter))
 
     ignore_jobs = []
 
@@ -162,16 +170,18 @@ def make(model_name, params):
     
     config = rl.Config()   
     
-    for param in params:
-        k,v = param.split("=")     
-        config.set_attr(k, v)        
+    for k,v in params.items():
+        try:
+            config.set_attr(k, v)
+        except:
+            # probably fine, just an unused argument.
+            pass
 
     agent = rl.Agent(name = model_name, config=config, make_new = True)
     agent.save()
     
 
-# todo: move
-def reevaluate(model_name):
+def evaluate(model, point):
     
     """ Re-runs the evaluation tests for this model.  Requires the backup
         models [model-name]_[x]k.p to be present."""  
@@ -179,18 +189,20 @@ def reevaluate(model_name):
 
     # needs to be updated for new eval...
 
+    raise Exception("Not implemented yet.")
+
     num_trials = 1
             
-    agent = rl.Agent(model_name)
+    agent = rl.Agent(model)
     x = 1
 
     model_fmt = "{0}_{1}k.p"
     
-    print("Re-evaluating the model {0}".format(model_name))
+    print("Re-evaluating the model {0}".format(model))
     
     # check peformance at each checkpoint.
-    while agent.exists(model_fmt.format(model_name, x)):
-        agent.load(model_fmt.format(model_name, x))
+    while agent.exists(model_fmt.format(model, x)):
+        agent.load(model_fmt.format(model, x))
         scores = agent.evaluate(episodes = num_trials)
         mean = np.mean(scores)
         error = np.std(scores) / np.sqrt(num_trials)
@@ -198,7 +210,7 @@ def reevaluate(model_name):
         x += 1
         
         # perform the save
-        master = rl.Agent(model_name)
+        master = rl.Agent(model)
         master.score_history[x*1000] = (mean, error)
         master.save()
         master.close()
@@ -210,9 +222,68 @@ def usage_error():
     print("Usage pong [train] [model-name]")
     exit()
 
-    
-if len(sys.argv) <= 1:
-    usage_error()
+def parse_params():
+    parser = argparse.ArgumentParser()
+
+    subparsers = parser.add_subparsers(dest='subparser')
+
+    parser_train = subparsers.add_parser('train', help = "Train model")
+    parser_train.add_argument('model', help = 'Name of the model.')
+    parser_train.add_argument('--episodes', default = '10000', type = int, help = 'Number of episodes to train to')
+    parser_train.set_defaults(func=lambda args: train(args.model, args.episodes))
+
+    parser_info = subparsers.add_parser('info', help = "Info on model")
+    parser_info.add_argument('model', help='Name of the model.')
+    parser_info.set_defaults(func=lambda args: info(args.model))
+
+    parser_make = subparsers.add_parser('make', help = "Make a new model")
+    parser_make.add_argument('model', help='Name of the model.')
+    parser_make.add_argument('--H', default='100', type=int, help='Number of hidden units.')
+    parser_make.add_argument('--batch_size', default='5', type=int, help='Batch size.')
+    parser_make.add_argument('--learning_rate', default=3e-3, type=float, help='Learning rate.')
+    parser_make.add_argument('--gamma', default=0.99, type=float, help='Gamma value for RMSprop.')
+    parser_make.add_argument('--weight_decay', default=1e-2, type=float, help='Weight decay.')
+    parser_make.add_argument('--discount_rate', default=0.99, type=float, help='Discount rate.')
+    parser_make.set_defaults(func=lambda args: make(args.model, vars(args)))
+
+    parser_work = subparsers.add_parser('work', help = "Enter worker mode, processes any pending jobs.")
+    parser_work.add_argument('--filter', default='', help='Worker will only work on files matching the given pattern.')
+    parser_work.set_defaults(func=lambda args: work(args.filter))
+
+    parser_view = subparsers.add_parser('view', help = "Enter view mode, showing list of all models.")
+    parser_view.add_argument('--filter', default='', help='View only files matching given pattern.')
+    parser_view.set_defaults(func=lambda args: view(args.filter))
+
+    parser_restart = subparsers.add_parser('restart', help = "Restart model from given point.")
+    parser_restart.add_argument('model', help='Name of the model.')
+    parser_restart.add_argument('--episode', default='0', help='Episode to restart from.')
+    parser_restart.set_defaults(func=lambda args: restart(args.model, args.episode))
+
+    parser_eval = subparsers.add_parser('eval', help = "Evaluate given model.")
+    parser_eval.add_argument('model', help='Name of the model.')
+    parser_eval.add_argument('point', default='missing', help='Which point to evaluate [missing|all|n] where n is the episode number.')
+    #parser_restart.add_argument('--deterministic', default='0', type=float, help='Determinism to use, 0 is default used during training, 1 = always use best.')
+    parser_eval.set_defaults(func=lambda args: evaluate(args.model, args.point))
+
+    # Create optional args by prefixing it with --
+    # Create short names for same by prefixing it with -
+    # Specify default values using 'default' argument
+    """
+    """
+
+    args = parser.parse_args()
+    print(args)
+    print(vars(args))
+    args.func(args)
+
+
+def main():
+
+    parse_params()
+
+
+main()
+"""
     
 if sys.argv[1].lower() == 'train':
     if len(sys.argv) <= 2:
@@ -221,7 +292,7 @@ if sys.argv[1].lower() == 'train':
 elif sys.argv[1].lower() == 'eval':
     if len(sys.argv) <= 2:
         usage_error()
-    reevaluate(sys.argv[2])
+    evaluate(sys.argv[2])
 elif sys.argv[1].lower() == 'make':
     make(sys.argv[2], sys.argv[3:])
 elif sys.argv[1].lower() == 'info':
@@ -235,4 +306,6 @@ elif sys.argv[1].lower() == 'watch':
 else:
     print("Usage pong [train] [model-name]")
     exit()
+    
+"""
     

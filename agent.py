@@ -281,6 +281,10 @@ class Agent:
         self.stats['machine_name'] = self.worker_name
 
     def evaluate(self, deterministic = False, episodes = 100):
+        """ 
+            Evaluate the models performance by running specified number of episodes. 
+            Returns a list of scores and frame counts for each episode.
+        """
         
         scores = []
         frames = []
@@ -392,10 +396,6 @@ class Agent:
 
         # saving
         if self.episode % 100 == 0:
-            # todo:
-            #has_lock = self.
-            #if nself.get_lock():
-            #    print("Lost lock, the file has been modified by ")
             print("Saving state.")
             self.save(with_lock = True)
 
