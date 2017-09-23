@@ -1,10 +1,8 @@
 import numpy as np
-import matplotlib.pyplot as plt
 import gym
-from gym import wrappers
 import pickle
 import os
-import datetime
+from datetime import datetime
 
 # just for host name
 import socket
@@ -55,7 +53,7 @@ class Config:
         self.H = 100
         self.batch_size = 5    
         self.learning_rate = 3e-3 
-        self.gamma = 0.99          # gamma for RMS prop
+        self.gamma = 0.99             # gamma for RMS prop
         self.discount_rate = 0.99     # discount rate for algorithm  
         self.weight_decay = 0.01
         self.data_type = 'float32'
@@ -103,16 +101,18 @@ class Agent:
         self.ema = None                 # exponential moving average
         self.rmsprop_cache = None 
         self.grad_buffer = None
-        
+
         self.config = Config() if config is None else config
         
-        self.env = gym.make("Pong-v0")
-        
+        self.env = None
+
         self.episode = 0
-                
+        self.worker_name = socket.gethostname()
+
         self.score_history = {}
         self.stats = {}
-            
+        self.lock_key = {}
+
         self.save_filename = "{0}.p".format(self.name)
         
         if self.exists(self.name):
@@ -120,7 +120,7 @@ class Agent:
                 if not silent: print("Model {0} already exists.".format(self.name))
                 exit()
             self.load()
-            if not silent: print("Pickling up '{0}' from episode {1}...".format(self.name, self.episode))
+            if not silent: print("\nPickling up '{0}' from episode {1}...\n".format(self.name, self.episode))
         else:
             
             if not make_new:
@@ -136,20 +136,42 @@ class Agent:
 
         self.grad_buffer = { k : np.zeros_like(v) for k,v in self.params.items() } # update buffers that add up gradients over a batch
     
-        self.batch_start_time = datetime.datetime.now()
+        self.batch_start_time = datetime.now()
 
         if not silent: self.config.display()
     
         # history over an entire episode (this will be big!)    
         self.history = History()
-                
-        
+
+
+    def get_lock(self):
+        """ Returns information on the current owner of this file. """
+        save_package = pickle.load(open(MODEL_FOLDER+self.save_filename, 'rb'))
+        if 'lock' not in save_package:
+            #old version of save file, assume not locked....
+            lock, worker, lock_key = (False, '', 0)
+        else:
+            lock, worker, lock_key = save_package['lock']
+
+        return lock, worker, lock_key
+
     def exists(self, model_name):
         """ Returns if model exists or not. """
         path = MODEL_FOLDER+"{0}.p".format(self.name)
         return os.path.isfile(path)
-        
-        
+
+
+    def last_updated(self, model_name = None):
+        """ Returns date model was last updated. """
+        if model_name is None: model_name = self.name
+        path = MODEL_FOLDER+"{0}.p".format(model_name)
+        return datetime.fromtimestamp(os.path.getmtime(path))
+
+
+    def recent(self, delay = 30):
+        """ Returns if this model was updated within 'delay' minutes. """
+        return (datetime.now() - self.last_updated()).total_seconds() < delay * 60
+
     def prepro(self, I):
         """ preprocess 210x160x3 uint8 frame into 6400 (80x80) 1D float vector """
         I = I[35:195] # crop
@@ -168,6 +190,11 @@ class Agent:
         return p, h # return probability of taking action 2, and hidden state
 
 
+    def close(self):
+        """ Frees memory for this agent. """
+        self.env.close()
+
+
     def policy_backward(self, eph, epx, epdlogp):
         """ backward pass. (eph is array of intermediate hidden states) """
         dW2 = np.dot(eph.T, epdlogp).ravel()
@@ -175,10 +202,21 @@ class Agent:
         dh[eph <= 0] = 0 # backpro prelu
         dW1 = np.dot(dh.T, epx)
         return {'W1':dW1, 'W2':dW2}
+
+
+    def lock(self):
+        """ Force a lock on this file. """
+        self.save(with_lock = True)
+
+
+    def unlock(self):
+        """ Release lock from this file. """
+        self.save(with_lock = False)
                 
         
-    def save(self, filename = None):
-        """ Saves model parameters to disk. """
+    def save(self, filename = None, with_lock = False):
+        """ Saves model parameters to disk.  If 'with_lock' is set this model will be marked as being locked
+            by this worker for 30 minutes.  """
         save_package = {}
         if filename is None: filename = self.save_filename
         save_package['params'] = self.params
@@ -187,6 +225,12 @@ class Agent:
         save_package['history'] = self.score_history
         save_package['stats'] = self.stats
         save_package['config'] = self.config
+
+        # record the last person to write to this file, and if the file should be considered locked or not.
+        # locks last for 30 minutes.
+        self.lock_key[filename] = np.random.randint(1e6,1e8)
+        save_package['lock'] = (with_lock, self.worker_name, self.lock_key[filename])
+
         pickle.dump(save_package, open(MODEL_FOLDER+filename, 'wb'))
         
         
@@ -199,6 +243,7 @@ class Agent:
         self.rmsprop_cache = save_package['rmsprop']
         self.score_history = save_package['history'] if 'history' in save_package else {}
         self.stats = save_package['stats'] if 'stats' in save_package else {}
+
         if 'config' in save_package:
             self.config = save_package['config']
             # some of these used to have different names
@@ -233,7 +278,7 @@ class Agent:
             self.params[k] += self.config.learning_rate * g / (np.sqrt(self.rmsprop_cache[k]) + 1e-5)            
             self.grad_buffer[k] = np.zeros_like(v) # reset batch gradient buffer
         self.params['W1'] -= self.params['W1'] * self.config.weight_decay * self.config.learning_rate
-        self.stats['machine_name'] = socket.gethostname()
+        self.stats['machine_name'] = self.worker_name
 
     def evaluate(self, deterministic = False, episodes = 100):
         
@@ -249,14 +294,22 @@ class Agent:
     def apply(self):
         """ Applies what was learned during training episode. """
 
-        self.episode += 1
+        lock, worker_name, lock_key = self.get_lock()
+        if (lock and (worker_name != self.worker_name or lock_key != self.lock_key[self.save_filename])):
+            # this means someone modified the file since our last save.
+            print("Expected lock: ", (self.worker_name, self.lock_key[self.save_filename]))
+            print("Found lock:    ", (worker_name, lock_key))
+            raise Exception("File was modified by another worker.  Terminating.")
+
         self.ema = self.ema * 0.95 + 0.05 * np.sum(self.history.reward) if self.ema is not None else np.sum(self.history.reward)
 
         # save on 0k
         if self.episode == 0:
             self.save(self.name + "_" + str(self.episode // 1000) + "k.p")
 
-        apply_start_time = datetime.datetime.now()
+        self.episode += 1
+
+        apply_start_time = datetime.now()
 
         # stack together all inputs, hidden states, action gradients, and rewards for this episode
         epx = np.vstack(self.history.x)
@@ -275,7 +328,7 @@ class Agent:
         grad = self.policy_backward(eph, epx, epdlogp)
         for k in self.params: self.grad_buffer[k] += grad[k] # accumulate grad over batch
 
-        apply_finish_time = datetime.datetime.now()
+        apply_finish_time = datetime.now()
 
         self.stats['last_episode_apply_time'] = (apply_finish_time - apply_start_time).total_seconds()
 
@@ -287,11 +340,11 @@ class Agent:
             self.stats['last_batch_rewards'] = batch_rewards
             self.stats['last_batch_score_mean'] = np.mean(batch_rewards)
             self.stats['last_batch_score_std'] = np.std(batch_rewards)
-            self.stats['last_batch_time'] = datetime.datetime.now() - self.batch_start_time
+            self.stats['last_batch_time'] = datetime.now() - self.batch_start_time
             if 'total_training_time' not in self.stats:
                 self.stats['total_training_time'] = 0.0
             self.stats['total_training_time'] = self.stats['total_training_time'] + self.stats['last_batch_time'].total_seconds()
-            self.batch_start_time = datetime.datetime.now()
+            self.batch_start_time = datetime.now()
 
         # save backup
         if self.episode % 1000 == 0:
@@ -324,22 +377,27 @@ class Agent:
             }
 
             print("Score = {0:.2f} (±{1:.4f})".format(score_mean, score_error))
-            self.save()
+            self.save(with_lock = True)
 
         # print
         if self.episode % 10 == 0:
             frames = self.stats['last_episode_frames']
             train_time = 1000.0 * self.stats['last_episode_train_time'] / frames
             apply_time = 1000.0 * self.stats['last_episode_apply_time'] / frames
-            self.stats.get('ema_history', []).append((self.episode, self.ema))
+            if 'ema_history' not in self.stats: self.stats['ema_history'] = []
+            self.stats['ema_history'].append((self.episode, self.ema))
             print("[{5}] Ep {0} had {4} steps with (EMA) reward {2:.2f} [{3:.2f}ms / frame]".format(
                 self.episode, np.sum(self.history.reward), self.ema, train_time + apply_time, frames, self.name
             ))
 
         # saving
         if self.episode % 100 == 0:
+            # todo:
+            #has_lock = self.
+            #if nself.get_lock():
+            #    print("Lost lock, the file has been modified by ")
             print("Saving state.")
-            self.save()
+            self.save(with_lock = True)
 
 
     def train(self, render = False, deterministic = False):
@@ -348,11 +406,13 @@ class Agent:
             Normally actions are selected randomly depending on the action probability,
             however during evaulation deterinistic actions can be enabled.
         """
-        
+
+        if self.env == None: self.env = gym.make("Pong-v0")
+
         done = False
         
         # timing
-        episode_start_time = datetime.datetime.now()
+        episode_start_time = datetime.now()
         prepro_time = 0.0
         forward_time = 0.0
         step_time = 0.0        
@@ -371,16 +431,16 @@ class Agent:
             if render: self.env.render()
 
             # preprocess the observation, set input to network to be difference image
-            start_time = datetime.datetime.now()
+            start_time = datetime.now()
             cur_x = self.prepro(observation)
             x = cur_x - prev_x if prev_x is not None else np.zeros(self.config.D, dtype = self.config.data_type)
             prev_x = cur_x
-            prepro_time += (datetime.datetime.now() - start_time).total_seconds() * 1000
+            prepro_time += (datetime.now() - start_time).total_seconds() * 1000
 
             # forward the policy network and sample an action from the returned probability
             # note, we pick an action non-deterministically.  This allows the agent to explore
             # actions that may, at first, see to be poor.
-            start_time = datetime.datetime.now()
+            start_time = datetime.now()
             action_prob, h = self.policy_forward(x)
             if deterministic:
                 if abs(action_prob - 0.5) < 0.2:
@@ -390,7 +450,7 @@ class Agent:
             else:
                 action = 2 if np.random.uniform() < action_prob else 3 
 
-            forward_time += (datetime.datetime.now() - start_time).total_seconds() * 1000
+            forward_time += (datetime.now() - start_time).total_seconds() * 1000
 
             # calculate a gradient that encourages the action that was taken to be taken
             # we will apply this gradient positively for positive rewards, and negative for negative rewards.
@@ -402,14 +462,14 @@ class Agent:
             self.history.logp_grad.append(y - action_prob)
 
             # apply our action and sample the new environment.
-            start_time = datetime.datetime.now()
+            start_time = datetime.now()
             observation, reward, done, info = self.env.step(action)
-            step_time += (datetime.datetime.now() - start_time).total_seconds() * 1000
+            step_time += (datetime.now() - start_time).total_seconds() * 1000
 
             # we record the reward after the step as this will be the reward for the previous action.
             self.history.reward.append(reward)
 
-        episode_finish_time = datetime.datetime.now()
+        episode_finish_time = datetime.now()
 
         # calculate some handy stats
         self.stats['last_episode_train_time'] = (episode_finish_time - episode_start_time).total_seconds()

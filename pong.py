@@ -4,6 +4,8 @@ import sys
 import utils
 import os
 import time
+import numpy as np #remove
+from datetime import datetime
 
 """
 
@@ -15,23 +17,25 @@ make: makes a new model with given parameters
 
 """
 
-def train(model_name):
+def train(model_name, training_episodes = 10000):
     """ Train specific model. """
 
     agent = rl.Agent(name = model_name)
 
-    training_episodes = 10000
-    
+    agent.lock()
+
     try:
         while agent.episode < training_episodes:
             agent.train()
             agent.apply()
     except Exception as e:
         print("Error:",e)
-        agent.env.close()
+        agent.close()
         return
 
-    agent.env.close()
+    agent.unlock()
+
+    agent.close()
 
     print("Finished.")
 
@@ -51,6 +55,7 @@ def get_models(filter = ''):
     """ Returns a list of models. """
     files = os.listdir('models')
     files = [file[:-2] for file in files if filter in file and file[-2:] == '.p' and not is_backup_file(file)]
+    return files
 
 
 def restart(model_name, pickup_point):
@@ -66,7 +71,10 @@ def restart(model_name, pickup_point):
     agent.name = model_name
     agent.save_filename = model_name+".p"
     agent.save()
-    train(model_name)
+    print("Model {0} saved.  Use pong.py train {0} to train".format(model_name))
+    print("Model RMSprop cache norm = {0:.1f}".format(np.linalg.norm(agent.rmsprop_cache['W1'])))
+    print()
+    #train(model_name)
 
 
 
@@ -85,22 +93,69 @@ def watch(filter = ''):
         print("\033["+str(len(files)+2)+"A", end='')
 
 
-def worker(filter = '*'):
+def requires_work(model_name):
+    """ Returns if this model requires more processing or not.
+        Models are considered to need work if they episodes <= 10000 and they 
+        are either unassigned, or have not been updated recently (30 min)
+    """
+
+    # first check that we have not completed.
+    model = rl.Agent(model_name, silent = True)
+    if model.episode >= 10000:
+        return False
+
+    # next check if someone is working on this
+    if model.worker != '' and model.recent():
+        return False
+
+
+    # wait 2 minutes before starting...
+    if model.recent(2):
+        return False
+
+    return True
+
+
+
+def worker(filter = ''):
+
+    print('Scanning....')
+
+    ignore_jobs = []
 
     while True:
 
         # look for potential models to work on
         files = get_models(filter)
 
-        # make sure model hasn't been worked on in a while (30 minutes...)
+        if len(files) == 0:
+            time.sleep(60)
+            continue
 
-        # see how much progress we need to make
+        jobs = []
 
-        # start working on this model
-        # >> can we spin this up in another thread, so that we can have multiple workers
+        for model in files:
+            if requires_work(model) and model not in ignore_jobs:
+                jobs.append(model)
 
-        print("Starting job {0}")
-        print("Finished job {0}")
+        if len(jobs) == 0:
+            continue
+
+        print(" - found {0} jobs".format(len(jobs)))
+
+        job = jobs[0]
+
+        try:
+            print("Starting job {0}".format(job))
+            train(job)
+            print("Finished job {0}".format(job))
+        except Exception as e:
+            print("Error: ",e)
+            ignore_jobs.append(job)
+
+        # we restart the search as a lot may be changed by the time we finish training...
+        time.sleep(2)
+
 
 
 def make(model_name, params):
@@ -146,7 +201,7 @@ def reevaluate(model_name):
         master = rl.Agent(model_name)
         master.score_history[x*1000] = (mean, error)
         master.save()
-        master.env.close()
+        master.close()
         
     print("Finished.")
     
@@ -171,6 +226,8 @@ elif sys.argv[1].lower() == 'make':
     make(sys.argv[2], sys.argv[3:])
 elif sys.argv[1].lower() == 'info':
     info(sys.argv[2:])
+elif sys.argv[1].lower() == 'work':
+    worker(sys.argv[2] if len(sys.argv) >= 3 else "")
 elif sys.argv[1].lower() == 'restart':
     restart(sys.argv[2], sys.argv[3] if len(sys.argv) >= 4 else "0")
 elif sys.argv[1].lower() == 'watch':
