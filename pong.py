@@ -6,6 +6,7 @@ import os
 import time
 import numpy as np #remove
 import argparse
+import logging
 
 """
 
@@ -179,42 +180,46 @@ def make(model_name, params):
 
     agent = rl.Agent(name = model_name, config=config, make_new = True)
     agent.save()
-    
-
-def evaluate(model, point):
-    
-    """ Re-runs the evaluation tests for this model.  Requires the backup
-        models [model-name]_[x]k.p to be present."""  
 
 
-    # needs to be updated for new eval...
+def evaluate(model, points = 'missing', num_trials = 100, deterministic = False):
 
-    raise Exception("Not implemented yet.")
+    agent = rl.Agent(model, silent = True)
 
-    num_trials = 1
-            
-    agent = rl.Agent(model)
-    x = 1
+    # get a lock
+    agent.save(with_lock = True)
 
-    model_fmt = "{0}_{1}k.p"
-    
-    print("Re-evaluating the model {0}".format(model))
-    
-    # check peformance at each checkpoint.
-    while agent.exists(model_fmt.format(model, x)):
-        agent.load(model_fmt.format(model, x))
-        scores = agent.evaluate(episodes = num_trials)
-        mean = np.mean(scores)
-        error = np.std(scores) / np.sqrt(num_trials)
-        print("[{2}k]: Score = {0:.2f} (±{1:.4f})".format(mean, error, x))
-        x += 1
-        
-        # perform the save
-        master = rl.Agent(model)
-        master.score_history[x*1000] = (mean, error)
-        master.save()
-        master.close()
-        
+    if points.lower() == 'missing':
+        # re-evaluate any missing data points.
+        print("Evaluating {0} at missing datapoints (n={1}).".format(model, num_trials))
+        max_epoch = agent.episode // 1000
+        for epoch in range(1, max_epoch+1):
+            episode = epoch * 1000
+            if not agent.has_evaluation(episode, deterministic):
+                print("Processing episode {0}:".format(episode))
+                agent.reevaluate(episode = episode, episodes = num_trials, deterministic = deterministic)
+                agent.save(with_lock = True)
+
+        print("Done.")
+
+    elif points.lower() == 'all':
+        # re-evaluate all data points.
+        print("Re-evaluating {0} at all datapoints (n={1}).".format(model, num_trials))
+        max_epoch = agent.episode // 1000
+        for epoch in range(1, max_epoch+1):
+            agent.reevaluate(episode = epoch*1000, episodes = num_trials, deterministic = deterministic)
+            agent.save(with_lock=True)
+        print("Done.")
+
+    else:
+        # assume points is episode number.
+        episode = int(points)
+        print("Evaluating {0} at episode {1} (n={2})".format(model, episode, num_trials))
+        agent.reevaluate(episode = episode, deterministic = deterministic, episodes = num_trials)
+
+    # release lock
+    agent.save(with_lock = False)
+
     print("Finished.")
     
     
@@ -262,22 +267,18 @@ def parse_params():
     parser_eval = subparsers.add_parser('eval', help = "Evaluate given model.")
     parser_eval.add_argument('model', help='Name of the model.')
     parser_eval.add_argument('point', default='missing', help='Which point to evaluate [missing|all|n] where n is the episode number.')
-    #parser_restart.add_argument('--deterministic', default='0', type=float, help='Determinism to use, 0 is default used during training, 1 = always use best.')
-    parser_eval.set_defaults(func=lambda args: evaluate(args.model, args.point))
-
-    # Create optional args by prefixing it with --
-    # Create short names for same by prefixing it with -
-    # Specify default values using 'default' argument
-    """
-    """
+    parser_eval.add_argument('--trials', default='100', type=int, help='Number of trials to perform.')
+    parser_eval.add_argument('--deterministic', dest='deterministic', action='store_true', help="If enabled evaluates with deterministic actions.")
+    parser_eval.set_defaults(func=lambda args: evaluate(args.model, points = args.point, num_trials = args.trials, deterministic = args.deterministic))
 
     args = parser.parse_args()
-    print(args)
-    print(vars(args))
     args.func(args)
 
 
 def main():
+    # disable gym logging.
+    logger = logging.getLogger('gym.envs.registration')
+    logger.setLevel(logging.CRITICAL)
 
     parse_params()
 

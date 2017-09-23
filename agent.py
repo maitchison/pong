@@ -2,6 +2,7 @@ import numpy as np
 import gym
 import pickle
 import os
+import logging
 from datetime import datetime
 
 # just for host name
@@ -94,7 +95,7 @@ class Config:
        
 class Agent:
     
-    def __init__(self, name = "model", config = None, make_new = False, silent = False):
+    def __init__(self, name = "model", config = None, make_new = False, silent = False, point_in_time = None):
         """ Initialise a model.  Name will be used when saving. """
         self.name = name                # name of model
         self.params = {}                # model params
@@ -280,6 +281,25 @@ class Agent:
         self.params['W1'] -= self.params['W1'] * self.config.weight_decay * self.config.learning_rate
         self.stats['machine_name'] = self.worker_name
 
+
+    def __backup_name(self, episode):
+        """ Name of the model as a specific backup point. """
+        return "{0}_{1}k".format(self.name, episode // 1000)
+
+
+    def reevaluate(self, episode, deterministic = False, episodes = 100):
+        """ Re-evaluate model at a specific point in time, then update our results. """
+
+        backup = Agent(self.__backup_name(episode), silent = True)
+        scores, frames = backup.evaluate(deterministic = deterministic, episodes=episodes)
+
+        key = episode if not deterministic else 'deterministic-'+str(episode)
+
+        self.process_evaluation(key, scores, frames)
+
+        backup.close()
+
+
     def evaluate(self, deterministic = False, episodes = 100):
         """ 
             Evaluate the models performance by running specified number of episodes. 
@@ -293,8 +313,49 @@ class Agent:
             scores.append(np.sum(self.history.reward))
             frames.append(len(self.history.reward))
         return scores, frames
-            
-    
+
+
+    def has_evaluation(self, episode, deterministic = False):
+        """ Returns if this model has an evaluation datapoint at given episode or not. """
+        if 'history' not in self.stats:
+            return False
+
+        key = episode if not deterministic else 'deterministic-'+str(episode)
+
+        return key in self.stats['history']
+
+
+    def process_evaluation(self, key, scores, frames, verbose = True):
+        """ Makes a record of an evaluation test under referece 'key'.  """
+
+        num_trials = len(scores)
+
+        score_mean = np.mean(scores)
+        score_std = np.std(scores)
+        score_error = np.std(scores) / np.sqrt(num_trials)
+        n = num_trials
+        frame_mean = np.mean(frames)
+        frame_std = np.std(frames)
+
+        # previous versions uses the 'score_history' field, we're now moving to stats['history'],
+        # but I'll keep this here for backwards compatability for a while.
+        self.score_history[key] = (score_mean, score_error)
+
+        if 'history' not in self.stats:
+            self.stats['history'] = {}
+
+        self.stats['history'][key] = {
+            'score_mean': score_mean,
+            'score_std': score_std,
+            'score_error': score_error,
+            'n': n,
+            'frame_mean': frame_mean,
+            'frame_std': frame_std
+        }
+
+        if verbose:
+            print("Score: {0:.2f} (±{1:.4f}) [key={2}]".format(score_mean, score_error, key))
+
     def apply(self):
         """ Applies what was learned during training episode. """
 
@@ -309,7 +370,7 @@ class Agent:
 
         # save on 0k
         if self.episode == 0:
-            self.save(self.name + "_" + str(self.episode // 1000) + "k.p")
+            self.save(self.__backup_name(0)+".p")
 
         self.episode += 1
 
@@ -350,38 +411,12 @@ class Agent:
             self.stats['total_training_time'] = self.stats['total_training_time'] + self.stats['last_batch_time'].total_seconds()
             self.batch_start_time = datetime.now()
 
-        # save backup
+        # save backup, and perform evaluation.
         if self.episode % 1000 == 0:
-            self.save(self.name+"_"+str(self.episode//1000)+"k.p")
+            self.save(self.__backup_name(self.episode)+".p")
             print("Performing evaluation...")
-            num_trials = 100
-            scores, frames = self.evaluate(episodes = num_trials)
-
-            score_mean = np.mean(scores)
-            score_std = np.std(scores)
-            score_error = np.std(scores) / np.sqrt(num_trials)
-            n = num_trials
-            frame_mean = np.mean(frames)
-            frame_std = np.std(frames)
-
-            # previous versions uses the 'score_history' field, we're now moving to stats['history'],
-            # but I'll keep this here for backwards compatability for a while.
-            self.score_history[self.episode] = (score_mean, score_error)
-
-            if 'history' not in self.stats:
-                self.stats['history'] = {}
-
-            self.stats['history'][self.episode] = {
-                'score_mean': score_mean,
-                'score_std': score_std,
-                'score_error': score_error,
-                'n': n,
-                'frame_mean': frame_mean,
-                'frame_std': frame_std
-            }
-
-            print("Score = {0:.2f} (±{1:.4f})".format(score_mean, score_error))
-            self.save(with_lock = True)
+            scores, frames = self.evaluate()
+            self.process_evaluation(self.episode, scores, frames)
 
         # print
         if self.episode % 10 == 0:
@@ -404,7 +439,7 @@ class Agent:
         """ 
             Train the current model for one episode. 
             Normally actions are selected randomly depending on the action probability,
-            however during evaulation deterinistic actions can be enabled.
+            however during evaulation determinstic actions can be enabled.
         """
 
         if self.env == None: self.env = gym.make("Pong-v0")
@@ -443,10 +478,7 @@ class Agent:
             start_time = datetime.now()
             action_prob, h = self.policy_forward(x)
             if deterministic:
-                if abs(action_prob - 0.5) < 0.2:
-                    action = 1
-                else:
-                    action = 2 if action_prob > 0.5 else 3 
+                action = 3 if action_prob < 0.5 else  2
             else:
                 action = 2 if np.random.uniform() < action_prob else 3 
 
